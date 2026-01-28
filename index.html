@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>圆柱体展开标注 - 飞象老师</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <style>
+    body { font-family: 'PingFang SC', sans-serif; background-color: #f8fafc; overflow-x: hidden; }
+    #canvas-container { height: 600px; border-radius: 20px; background: #fff; position: relative; }
+    .label { color: #064e3b; font-family: 'Times New Roman', serif; font-style: italic; font-weight: bold; font-size: 18px; background: rgba(255,255,255,0.7); padding: 2px 8px; border-radius: 4px; pointer-events: none; border: 1px solid rgba(6,78,59,0.2); }
+    .slider-thumb::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #0A4737; border-radius: 50%; cursor: pointer; }
+  </style>
+</head>
+<body class="p-4 md:p-8">
+  <div class="max-w-6xl mx-auto">
+    <div class="flex justify-between items-end mb-6">
+      <div>
+        <h1 class="text-3xl font-bold text-slate-800">圆柱展开：体面分离</h1>
+        <p class="text-slate-500 mt-1">上下底面垂直位移，清晰展示结构关系</p>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div class="lg:col-span-3 relative">
+        <div id="canvas-container" class="shadow-xl border border-slate-200"></div>
+      </div>
+
+      <div class="flex flex-col gap-6">
+        <div class="bg-white p-6 rounded-3xl shadow-lg border border-slate-100">
+          <button id="toggleBtn" class="w-full py-4 bg-emerald-900 hover:bg-emerald-800 text-white rounded-2xl font-bold transition-all shadow-lg active:scale-95 mb-6">
+            展开并分离
+          </button>
+          
+          <div class="space-y-5">
+            <div>
+              <div class="flex justify-between text-xs font-bold text-slate-500 mb-2"><span>半径 (r)</span><span id="rText" class="text-emerald-700">0.60</span></div>
+              <input type="range" id="rSlider" min="0.4" max="0.8" step="0.01" value="0.6" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none slider-thumb">
+            </div>
+            <div>
+              <div class="flex justify-between text-xs font-bold text-slate-500 mb-2"><span>高度 (h)</span><span id="hText" class="text-emerald-700">1.40</span></div>
+              <input type="range" id="hSlider" min="0.8" max="2.0" step="0.01" value="1.4" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none slider-thumb">
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-emerald-50 p-6 rounded-3xl border border-emerald-100">
+          <h4 class="text-emerald-800 font-bold mb-2">几何解析：</h4>
+          <ul class="text-sm text-emerald-700 space-y-2">
+            <li>• 绿色矩形：侧面积 $S_{侧} = 2\pi rh$</li>
+            <li>• 橙色圆盘：底面积 $S_{底} = \pi r^2$</li>
+            <li>• 虚线框：原始占据的体积空间</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let scene, camera, renderer, labelRenderer, controls;
+    let sideMesh, topMesh, bottomMesh, ghostCylinder;
+    let labelL, labelH, labelTopArea, labelBottomArea; 
+    let radius = 0.6, height = 1.4, progress = 0;
+    let isExpanded = false;
+
+    function init() {
+      const container = document.getElementById('canvas-container');
+      
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xffffff);
+
+      camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.1, 1000);
+      camera.position.set(8, 5, 12);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(renderer.domElement);
+
+      labelRenderer = new THREE.CSS2DRenderer();
+      labelRenderer.setSize(container.clientWidth, container.clientHeight);
+      labelRenderer.domElement.style.position = 'absolute';
+      labelRenderer.domElement.style.top = '0px';
+      labelRenderer.domElement.style.pointerEvents = 'none';
+      container.appendChild(labelRenderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+      dirLight.position.set(5, 10, 5);
+      scene.add(dirLight);
+
+      createLabels();
+      createModel();
+      animate();
+    }
+
+    function createLabels() {
+      const divL = document.createElement('div');
+      divL.className = 'label';
+      divL.innerHTML = '2πr';
+      labelL = new THREE.CSS2DObject(divL);
+      scene.add(labelL);
+
+      const divH = document.createElement('div');
+      divH.className = 'label';
+      divH.innerHTML = 'h';
+      labelH = new THREE.CSS2DObject(divH);
+      scene.add(labelH);
+
+      // 新增：底面积标注 πr²
+      const divTopArea = document.createElement('div');
+      divTopArea.className = 'label';
+      divTopArea.innerHTML = 'πr²';
+      labelTopArea = new THREE.CSS2DObject(divTopArea);
+      scene.add(labelTopArea);
+
+      const divBottomArea = document.createElement('div');
+      divBottomArea.className = 'label';
+      divBottomArea.innerHTML = 'πr²';
+      labelBottomArea = new THREE.CSS2DObject(divBottomArea);
+      scene.add(labelBottomArea);
+    }
+
+    function createModel() {
+      const toRemove = [];
+      scene.traverse(child => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) toRemove.push(child);
+      });
+      toRemove.forEach(obj => scene.remove(obj));
+
+      const ghostGeo = new THREE.CylinderGeometry(radius, radius, height, 32, 1, true);
+      ghostCylinder = new THREE.Mesh(ghostGeo, new THREE.MeshBasicMaterial({ 
+        color: 0xcccccc, 
+        wireframe: true, 
+        transparent: true, 
+        opacity: 0.15 
+      }));
+      scene.add(ghostCylinder);
+
+      const sideGeo = new THREE.PlaneGeometry(2 * Math.PI * radius, height, 128, 1);
+      sideGeo.translate(Math.PI * radius, 0, 0);
+      sideMesh = new THREE.Mesh(sideGeo, new THREE.MeshPhongMaterial({ 
+        color: 0x10b981, 
+        side: THREE.DoubleSide, 
+        transparent: true, 
+        opacity: 0.8 
+      }));
+      
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(sideGeo), 
+        new THREE.LineBasicMaterial({ color: 0x064e3b, transparent: true, opacity: 0.4 })
+      );
+      sideMesh.add(edges);
+      scene.add(sideMesh);
+
+      const capGeo = new THREE.CircleGeometry(radius, 64);
+      const capMat = new THREE.MeshPhongMaterial({ color: 0xf97316, side: THREE.DoubleSide });
+      topMesh = new THREE.Mesh(capGeo, capMat);
+      bottomMesh = new THREE.Mesh(capGeo, capMat);
+      scene.add(topMesh, bottomMesh);
+
+      updateAnimation(progress);
+    }
+
+    function updateAnimation(p) {
+      const circumference = 2 * Math.PI * radius;
+      const pos = sideMesh.geometry.attributes.position;
+      const peelZ = p * 1.5;
+
+      for (let i = 0; i < pos.count; i++) {
+        const x = (i % (128 + 1)) / 128 * circumference;
+        const y = pos.getY(i);
+        const theta = x / radius;
+        const cylX = Math.sin(theta) * radius;
+        const cylZ = Math.cos(theta) * radius;
+        const planX = x;
+        const planZ = radius + peelZ;
+        pos.setXYZ(i, THREE.MathUtils.lerp(cylX, planX, p), y, THREE.MathUtils.lerp(cylZ, planZ, p));
+      }
+      pos.needsUpdate = true;
+
+      const centerX = THREE.MathUtils.lerp(0, circumference/2, p);
+      const centerZ = THREE.MathUtils.lerp(0, radius + peelZ, p);
+      const verticalGap = p * 1.2; 
+      
+      topMesh.position.set(centerX, height/2 + verticalGap, centerZ);
+      topMesh.rotation.x = THREE.MathUtils.lerp(-Math.PI/2, 0, p);
+      
+      bottomMesh.position.set(centerX, -(height/2 + verticalGap), centerZ);
+      bottomMesh.rotation.x = THREE.MathUtils.lerp(Math.PI/2, 0, p);
+
+      // 2πr 标注
+      labelL.position.set(centerX, -height/2 - 0.2, radius + peelZ); 
+      labelL.element.style.opacity = p;
+
+      // h 标注
+      labelH.position.set(THREE.MathUtils.lerp(0, circumference + 0.5, p), 0, radius + peelZ);
+      labelH.element.style.opacity = p;
+
+      // 新增：πr² 标注位置（跟随圆盘中心）
+      labelTopArea.position.copy(topMesh.position);
+      labelTopArea.element.style.opacity = p;
+      
+      labelBottomArea.position.copy(bottomMesh.position);
+      labelBottomArea.element.style.opacity = p;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
+    }
+
+    document.getElementById('toggleBtn').onclick = () => {
+      isExpanded = !isExpanded;
+      document.getElementById('toggleBtn').innerText = isExpanded ? "还原圆柱" : "展开并分离";
+      gsap.to({v: progress}, {
+        v: isExpanded ? 1 : 0,
+        duration: 1.8,
+        ease: "power2.inOut",
+        onUpdate: function() {
+          progress = this.targets()[0].v;
+          updateAnimation(progress);
+        }
+      });
+    };
+
+    document.getElementById('rSlider').oninput = (e) => {
+      radius = parseFloat(e.target.value);
+      document.getElementById('rText').innerText = radius.toFixed(2);
+      createModel();
+    };
+
+    document.getElementById('hSlider').oninput = (e) => {
+      height = parseFloat(e.target.value);
+      document.getElementById('hText').innerText = height.toFixed(2);
+      createModel();
+    };
+
+    window.addEventListener('resize', () => {
+      const container = document.getElementById('canvas-container');
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      labelRenderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    window.onload = init;
+  </script>
+</body>
+</html>
